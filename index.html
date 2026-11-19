@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI 복싱 스파링 VR</title>
+    <link rel="stylesheet" href="style.css" />
+    <!-- 3D 도구 Three.js (버전 0.170.0으로 고정). import "three"라고 쓰면 이 주소에서 불러와요 -->
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <!-- 게임 화면: 브라우저 창 전체를 채워요. (scene.js가 이 안 맨 앞에 3D 캔버스를 넣어요) -->
+    <div class="stage">
+      <!-- 오른쪽 아래 작은 웹캠 창 (손 점·얼굴 상자 확인용) -->
+      <video id="video" class="cam" playsinline muted></video>
+      <canvas id="pip" class="marks"></canvas>
+
+      <!-- 맨 위 고정: 체력바 | 라운드·시간 | 체력바 -->
+      <header class="hud">
+        <div class="fighter me">
+          <div class="name"><span>🔵 나</span><b id="myHpText">100</b></div>
+          <div class="track"><i id="myHp"></i></div>
+        </div>
+        <div class="clock">
+          <span id="round">연습</span>
+          <b id="time">–</b>
+        </div>
+        <div class="fighter ai">
+          <div class="name"><b id="aiHpText">100</b><span>펀치봇 🔴</span></div>
+          <div class="track"><i id="aiHp"></i></div>
+        </div>
+      </header>
+
+      <!-- 체력바 아래: 안내 글자 + 기록 -->
+      <div class="sub">
+        <p id="status" role="status">[카메라 켜기]를 누르면 링에 올라가요.</p>
+        <div class="stats">
+          <span>콤보 <b id="combo">0</b></span>
+          <span>가드 <b id="blocks">0</b></span>
+          <span>회피 <b id="dodges">0</b></span>
+          <span>최고 <b id="best">0</b></span>
+        </div>
+      </div>
+
+      <!-- 공격 예고 -->
+      <div id="warn" class="warn" hidden>⚠️ 가드! 또는 피하기!</div>
+      <!-- 내가 맞았을 때 가장자리가 빨갛게 번쩍 -->
+      <div id="hurt" class="hurt"></div>
+      <!-- 카운트다운, 결과 -->
+      <div id="overlay" class="overlay" hidden></div>
+
+      <!-- 처음 안내 카드 (카메라를 켜면 사라져요) -->
+      <section id="intro" class="intro">
+        <h1>🥽 AI 복싱 스파링 <span class="tag">VR</span></h1>
+        <ul>
+          <li>✊ <b>주먹 쥐고 빠르게 뻗기</b> = 펀치</li>
+          <li>🎯 <b>초록 고리</b>(빈틈)를 쳐요</li>
+          <li>⚠️ 예고가 뜨면 <b>두 주먹 가드</b> 또는 <b>고개를 옆으로 툭 빼서 피하기</b></li>
+          <li>💫 막거나 피하면 상대가 비틀! <b>카운터 2배</b></li>
+          <li>👀 고개를 움직이면 3D 시점이 따라 움직여요</li>
+        </ul>
+        <p class="note">
+          카메라에서 한 걸음 떨어져서 얼굴과 두 손이 같이 보이게 서 주세요.<br />
+          영상은 이 브라우저 안에서만 분석돼요. 서버로 보내거나 저장하지 않아요.
+          얼굴은 위치만 읽고, 누구인지는 알아보지 않아요.
+        </p>
+      </section>
+
+      <!-- 진단 표시 ([진단] 버튼을 누를 때만 보여요) -->
+      <pre id="debug" class="debug" hidden></pre>
+
+      <!-- 왼쪽 아래 도구 막대 -->
+      <nav class="toolbar">
+        <button id="start" type="button">카메라 켜기</button>
+        <button id="play" type="button" hidden>시합 시작</button>
+        <button id="stop" type="button" hidden>끄기</button>
+        <label class="option">
+          난이도
+          <select id="level">
+            <option value="easy">쉬움</option>
+            <option value="normal" selected>보통</option>
+            <option value="hard">어려움</option>
+          </select>
+        </label>
+        <label class="option"><input id="sound" type="checkbox" checked /> 소리</label>
+        <button id="fullscreen" type="button" class="small" title="전체화면 (나올 때는 Esc)">⛶ 전체화면</button>
+        <button id="debugToggle" type="button" class="small">진단</button>
+      </nav>
+    </div>
+
+    <script type="module" src="main.js"></script>
+  </body>
+</html>
