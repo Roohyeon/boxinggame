@@ -18,9 +18,13 @@ export const QUALITY = {
   light: { pixelRatio: 0.75, shadow: 0, crowdRows: 2, faceEvery: 2 },
 };
 
+// 3D 화면을 그리는 최대 폭 (픽셀). 창이 더 커도 이 크기로 그린 뒤 늘려서 보여줘요. (가벼워요)
+const MAX_RENDER_WIDTH = 960;
+
 export function createWorld(container) {
   // ── 그리는 도구 (WebGL) ──
-  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true }); // alpha: 뒤가 비쳐 보일 수 있게
+  // antialias(가장자리 다듬기)는 꺼요. 조금 계단처럼 보여도 훨씬 가벼워요.
+  const renderer = new THREE.WebGLRenderer({ antialias: false, alpha: true }); // alpha: 뒤가 비쳐 보일 수 있게
   renderer.shadowMap.enabled = true;
   renderer.shadowMap.type = THREE.PCFShadowMap; // 일반 그림자 (부드러운 그림자보다 가벼워요)
   renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -54,9 +58,12 @@ export function createWorld(container) {
   scene.add(gloves.left, gloves.right);
 
   // 화면 크기가 바뀌면 3D 화면도 맞춰요
+  let wantedPixelRatio = 1; // 화질 단계에서 정한 선명도
   function resize() {
     const w = container.clientWidth;
     const h = container.clientHeight;
+    // 그리는 폭이 MAX_RENDER_WIDTH를 넘지 않게 선명도를 낮춰요
+    renderer.setPixelRatio(Math.min(wantedPixelRatio, MAX_RENDER_WIDTH / Math.max(1, w)));
     renderer.setSize(w, h, false);
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
@@ -68,8 +75,33 @@ export function createWorld(container) {
   let shakeAmount = 0;
   const lookTarget = new THREE.Vector3(0, 1.45, -1.5); // 펀치봇 쪽을 바라봐요
 
-  // ── 불꽃 ──
+  // ── 불꽃: 미리 6개 만들어 두고 돌려써요 (펀치마다 새로 만들면 느려져요) ──
+  const SPARK_MAX = 60; // 불꽃 하나에 들어가는 알갱이 최대 개수
   const sparks = [];
+  for (let i = 0; i < 6; i++) {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(SPARK_MAX * 3), 3));
+    const points = new THREE.Points(
+      geometry,
+      new THREE.PointsMaterial({
+        size: 0.035,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      }),
+    );
+    points.visible = false;
+    points.frustumCulled = false;
+    scene.add(points);
+    sparks.push({
+      points,
+      velocities: Array.from({ length: SPARK_MAX }, () => new THREE.Vector3()),
+      count: 0,
+      born: -Infinity,
+    });
+  }
+  let nextSpark = 0;
+  const SPARK_LIFE = 0.45; // 초
 
   const world = {
     renderer,
@@ -89,7 +121,7 @@ export function createWorld(container) {
 
     // 화질 바꾸기 (QUALITY 중 하나)
     setQuality(q) {
-      renderer.setPixelRatio(q.pixelRatio);
+      wantedPixelRatio = q.pixelRatio;
       resize();
       spot.castShadow = q.shadow > 0;
       if (q.shadow > 0 && spot.shadow.mapSize.x !== q.shadow) {
@@ -123,25 +155,22 @@ export function createWorld(container) {
       });
 
       // 불꽃 움직이기
-      for (let i = sparks.length - 1; i >= 0; i--) {
-        const s = sparks[i];
+      sparks.forEach((s) => {
+        if (!s.points.visible) return;
         const age = (now - s.born) / 1000;
-        if (age > s.life) {
-          scene.remove(s.points);
-          s.points.geometry.dispose();
-          s.points.material.dispose();
-          sparks.splice(i, 1);
-          continue;
+        if (age > SPARK_LIFE) {
+          s.points.visible = false; // 다 타면 숨겨 두고 다음에 또 써요
+          return;
         }
         const pos = s.points.geometry.attributes.position;
-        for (let j = 0; j < s.velocities.length; j++) {
+        for (let j = 0; j < s.count; j++) {
           const v = s.velocities[j];
           v.y -= 3 * dt; // 살짝 떨어지게
           pos.setXYZ(j, pos.getX(j) + v.x * dt, pos.getY(j) + v.y * dt, pos.getZ(j) + v.z * dt);
         }
         pos.needsUpdate = true;
-        s.points.material.opacity = 1 - age / s.life;
-      }
+        s.points.material.opacity = 1 - age / SPARK_LIFE;
+      });
     },
 
     render() {
@@ -154,25 +183,21 @@ export function createWorld(container) {
 
     // 타격 불꽃 (position: 3D 위치)
     burst(position, color, count = 30) {
-      const geometry = new THREE.BufferGeometry();
-      const positions = new Float32Array(count * 3);
-      const velocities = [];
-      for (let i = 0; i < count; i++) {
-        positions.set([position.x, position.y, position.z], i * 3);
-        const dir = new THREE.Vector3().randomDirection();
-        velocities.push(dir.multiplyScalar(0.8 + Math.random() * 1.8));
+      // 가장 오래된 불꽃을 꺼내 다시 써요
+      const s = sparks[nextSpark];
+      nextSpark = (nextSpark + 1) % sparks.length;
+      s.count = Math.min(count, SPARK_MAX);
+      const pos = s.points.geometry.attributes.position;
+      for (let i = 0; i < s.count; i++) {
+        pos.setXYZ(i, position.x, position.y, position.z);
+        s.velocities[i].randomDirection().multiplyScalar(0.8 + Math.random() * 1.8);
       }
-      geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      const material = new THREE.PointsMaterial({
-        color,
-        size: 0.035,
-        transparent: true,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      });
-      const points = new THREE.Points(geometry, material);
-      scene.add(points);
-      sparks.push({ points, velocities, born: performance.now(), life: 0.45 });
+      pos.needsUpdate = true;
+      s.points.geometry.setDrawRange(0, s.count);
+      s.points.material.color.set(color);
+      s.points.material.opacity = 1;
+      s.points.visible = true;
+      s.born = performance.now();
     },
 
     // 3D 위치 → 화면 위 픽셀 위치 (글자를 띄울 때 써요)

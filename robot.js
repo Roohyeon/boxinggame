@@ -229,14 +229,32 @@ export function createRobot(scene) {
     },
 
     // 화면 위 한 점(-1~1)으로 펀치를 뻗었을 때, 펀치봇 어디에 맞는지
+    // assistWidth: 조준 보정 범위 (펀치봇 가운데에서 좌우로 화면 폭의 몇 배까지 맞은 걸로 칠지)
     // 돌려주는 값: { zone, point } 또는 null(헛손질)
-    hitTest(camera, ndcX, ndcY) {
+    hitTest(camera, ndcX, ndcY, assistWidth) {
+      // 1) 정확히 몸에 닿았으면 그 자리
       raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), camera);
       const hit = raycaster.intersectObjects([headHit, bodyHit], false)[0];
-      if (!hit) return null;
-      if (hit.object === bodyHit) return { zone: "body", point: hit.point };
-      const local = head.worldToLocal(hit.point.clone());
-      return { zone: local.x < 0 ? "headL" : "headR", point: hit.point };
+      if (hit) {
+        if (hit.object === bodyHit) return { zone: "body", point: hit.point };
+        const local = head.worldToLocal(hit.point.clone());
+        return { zone: local.x < 0 ? "headL" : "headR", point: hit.point };
+      }
+
+      // 2) 조준 보정: 펀치봇 근처면 맞은 걸로 쳐요
+      //    높이로 얼굴/몸통을 정하고, 얼굴이면 좌우로 왼쪽/오른쪽을 정해요
+      const headPos = headHit.getWorldPosition(new THREE.Vector3());
+      const bodyPos = bodyHit.getWorldPosition(new THREE.Vector3());
+      const headScreen = headPos.clone().project(camera);
+      const bodyScreen = bodyPos.clone().project(camera);
+      if (Math.abs(ndcX - headScreen.x) > assistWidth * 2) return null; // 너무 바깥쪽 = 헛손질
+      const shoulderLine = (headScreen.y + bodyScreen.y) / 2;
+      if (ndcY < shoulderLine) return { zone: "body", point: bodyPos.add(new THREE.Vector3(0, 0, 0.25)) };
+      const left = ndcX < headScreen.x;
+      return {
+        zone: left ? "headL" : "headR",
+        point: headPos.add(new THREE.Vector3(left ? -0.07 : 0.07, 0, 0.15)),
+      };
     },
 
     // 공격 글러브의 지금 위치 (불꽃 위치용)

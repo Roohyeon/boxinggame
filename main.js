@@ -74,12 +74,20 @@ const RANKS = [
 ];
 const BEST_KEY = "boxing-vr-best-score"; // 최고 기록 저장 이름 (이 브라우저에만 저장)
 
+// 얼굴 위치를 몇 화면에 한 번 읽을지
+const FACE_EVERY = { normal: 6, attack: 2 };
+
 // 내 글러브가 3D 화면 속에서 얼마나 앞에 있을지 (m)
 const GLOVE = {
   restDistance: 0.5, // 평소
   punchDistance: 1.15, // 펀치를 뻗었을 때 (펀치봇 바로 앞)
   depthGain: 0.5, // 주먹이 카메라에 다가온 만큼 화면 속에서도 앞으로
+  extendMs: 300, // 펀치가 나가면 글러브가 이 시간(ms) 동안 앞으로 뻗어 있어요
 };
+
+// 조준 보정: 펀치봇 가운데에서 좌우로 "화면 폭의 이 비율" 안이면 맞은 걸로 쳐요
+// (0.8 = 화면 폭의 80%. 더 늘리면 더 쉬워지고, 1이면 어디로 뻗어도 맞아요)
+const AIM_ASSIST = 0.8;
 
 // 화면 요소
 const video = document.getElementById("video");
@@ -272,7 +280,8 @@ startButton.addEventListener("click", async () => {
     statusText.textContent =
       "카메라를 켜는 중… (브라우저가 허락을 물어보면 [허용]을 눌러 주세요)";
     stream = await navigator.mediaDevices.getUserMedia({
-      video: { width: 1280, height: 720, facingMode: "user" },
+      // 640×360: 인식 프로그램은 어차피 작게 줄여서 봐요. 작게 받으면 컴퓨터가 훨씬 덜 힘들어요
+      video: { width: 640, height: 360, facingMode: "user" },
       audio: false,
     });
     video.srcObject = stream;
@@ -379,8 +388,12 @@ function loop(now) {
       lastVideoTime = video.currentTime;
       frameCount += 1;
       updateHands(handLandmarker.detectForVideo(video, now), now);
-      // 얼굴은 몇 화면에 한 번만 (컴퓨터가 덜 힘들게. 화질 단계마다 달라요)
-      if (faceDetector && frameCount % quality().faceEvery === 0) {
+      // 얼굴은 필요할 때만 자주 읽어요 (컴퓨터가 덜 힘들게)
+      //  공격 예고·공격 중: 피하기를 재야 하니까 2화면에 1번
+      //  평소: 시점만 따라가면 되니까 6화면에 1번
+      const attacking = op.state === "windup" || op.state === "strike";
+      const faceEvery = attacking ? FACE_EVERY.attack : FACE_EVERY.normal;
+      if (faceDetector && frameCount % faceEvery === 0) {
         updateHead(faceDetector.detectForVideo(video, now), now);
       }
       diag.analyses += 1;
@@ -526,6 +539,7 @@ function updateHands(result, now) {
       if (fistReady && !guardNow && hand.power >= 1 && now >= state.cooldownUntil) {
         state.punching = true;
         state.punchStart = now;
+        state.extendUntil = now + GLOVE.extendMs; // 글러브를 잠깐 쭉 뻗어 보여줘요
         playSwoosh();
       }
     } else if (hand.power < PUNCH.endPower || now - state.punchStart > PUNCH.maxPunchMs) {
@@ -544,7 +558,10 @@ function updateHands(result, now) {
     Object.assign(gloveAims[side], {
       ndcX,
       ndcY,
-      dist: state.punching ? GLOVE.punchDistance : GLOVE.restDistance + reach * GLOVE.depthGain,
+      dist:
+        state.punching || now < (state.extendUntil ?? 0)
+          ? GLOVE.punchDistance
+          : GLOVE.restDistance + reach * GLOVE.depthGain,
       seenAt: now,
     });
 
@@ -572,7 +589,9 @@ function updateGloves(now, dt) {
     }
     const dir = world.rayDirection(aim.ndcX, aim.ndcY);
     const target = camera.position.clone().addScaledVector(dir, aim.dist);
-    glove.position.lerp(target, 1 - Math.pow(0.5, dt * 60));
+    // 앞으로 뻗을 때는 더 빠르게 따라가요 (휙! 하고 나가게)
+    const fast = aim.dist > GLOVE.restDistance + 0.3;
+    glove.position.lerp(target, 1 - Math.pow(fast ? 0.25 : 0.5, dt * 60));
     glove.lookAt(glove.position.clone().add(dir)); // 주먹 앞면이 앞을 봐요
   });
 }
@@ -581,7 +600,7 @@ function updateGloves(now, dt) {
 function landPunch(ndcX, ndcY, now) {
   if (op.hp <= 0) return;
   const lv = level();
-  const hit = robot.hitTest(world.camera, ndcX, ndcY);
+  const hit = robot.hitTest(world.camera, ndcX, ndcY, AIM_ASSIST);
   if (!hit) {
     popupAtScreen(ndcX, ndcY, "헛손질", "#cbd5e1", 0.7);
     return;
@@ -650,8 +669,7 @@ function resolveStrike(now, lv) {
   // 맞았어요: 화면이 크게 흔들리고 빨갛게 번쩍, 잠깐 흐려져요
   playHurt();
   world.shake(0.12);
-  restartAnimation(hurtLayer, "on");
-  restartAnimation(stage, "dazed");
+  restartAnimation(hurtLayer, "on"); // 빨간 번쩍임 (흐림 효과는 무거워서 뺐어요)
   game.combo = 0;
   if (!fighting) {
     popupAtScreen(0, 0.55, "맞았어요! (연습이라 괜찮아요)", "#f87171", 0.9);
@@ -679,7 +697,11 @@ function popupAtScreen(ndcX, ndcY, text, color, scale = 1) {
   showPopup(((ndcX + 1) / 2) * stage.clientWidth, ((1 - ndcY) / 2) * stage.clientHeight, text, color, scale);
 }
 
+const MAX_POPUPS = 5; // 떠오르는 글자는 한 번에 이만큼만 (많으면 느려져요)
+
 function showPopup(x, y, text, color, scale) {
+  const shown = stage.querySelectorAll(".pop");
+  if (shown.length >= MAX_POPUPS) shown[0].remove(); // 가장 오래된 글자부터 지워요
   const el = document.createElement("div");
   el.className = "pop";
   el.textContent = text;
@@ -698,12 +720,12 @@ function drawPip() {
     pip.fillStyle = hand.state.punching ? "#fb923c" : hand.fist ? "#f87171" : "#e2e8f0";
     hand.points.forEach((p) => {
       pip.beginPath();
-      pip.arc(p.x, p.y, 6, 0, Math.PI * 2);
+      pip.arc(p.x, p.y, 3, 0, Math.PI * 2);
       pip.fill();
     });
   });
   if (head.box) {
-    pip.lineWidth = 4;
+    pip.lineWidth = 2;
     pip.strokeStyle = isDodging() ? "#4ade80" : "#60a5fa";
     pip.strokeRect(head.box.originX, head.box.originY, head.box.width, head.box.height);
   }

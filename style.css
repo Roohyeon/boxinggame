@@ -32,20 +32,6 @@ body {
   display: block;
 }
 
-/* 맞았을 때 잠깐 흐려지는 시야 */
-.stage.dazed > canvas.three {
-  animation: dazed 0.6s ease-out;
-}
-
-@keyframes dazed {
-  from {
-    filter: blur(6px) saturate(1.6);
-  }
-  to {
-    filter: none;
-  }
-}
-
 .hurt {
   position: absolute;
   inset: 0;
